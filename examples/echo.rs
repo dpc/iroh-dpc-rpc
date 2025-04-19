@@ -4,6 +4,7 @@ use iroh::Endpoint;
 use iroh::protocol::Router;
 use iroh_base::ticket::NodeTicket;
 use iroh_dpc_rpc::{DpcRpc, RpcExt};
+use std::time::{Duration, Instant};
 use tracing::info;
 
 const ECHO_RPC_ID: u16 = 1;
@@ -28,6 +29,18 @@ enum Commands {
         /// The message to echo
         #[arg(short, long)]
         message: String,
+    },
+    /// Benchmark client performance
+    ClientBenchmark {
+        /// The connectivity ticket provided by the server
+        #[arg(short, long)]
+        ticket: String,
+        /// Number of requests to send
+        #[arg(short, long, default_value = "1000")]
+        count: usize,
+        /// Message size in bytes
+        #[arg(short, long, default_value = "100")]
+        size: usize,
     },
 }
 
@@ -96,6 +109,82 @@ async fn run_client(ticket_str: &str, message: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn run_client_benchmark(ticket_str: &str, count: usize, size: usize) -> anyhow::Result<()> {
+    let ticket: NodeTicket = ticket_str.parse()?;
+    let endpoint = Endpoint::builder().bind().await?;
+    let mut conn = endpoint.connect(ticket, ECHO_RPC_ALPN).await?;
+
+    // Generate a message of the specified size
+    let message = "A".repeat(size);
+    
+    println!("Starting benchmark with {} requests of {} bytes each", count, size);
+    
+    // Store latencies for histogram
+    let mut latencies = Vec::with_capacity(count);
+    
+    for i in 0..count {
+        if i % 100 == 0 {
+            println!("Progress: {}/{}", i, count);
+        }
+        
+        let request = EchoRequest {
+            message: message.clone(),
+        };
+        
+        let start = Instant::now();
+        let _: EchoResponse = conn.make_request_response(ECHO_RPC_ID, request).await?;
+        let elapsed = start.elapsed();
+        
+        latencies.push(elapsed);
+    }
+    
+    // Calculate statistics
+    latencies.sort();
+    
+    let min = latencies.first().unwrap_or(&Duration::ZERO);
+    let max = latencies.last().unwrap_or(&Duration::ZERO);
+    let median = latencies.get(count / 2).unwrap_or(&Duration::ZERO);
+    let p99 = latencies.get((count as f64 * 0.99) as usize).unwrap_or(&Duration::ZERO);
+    
+    let sum: Duration = latencies.iter().sum();
+    let mean = sum / count as u32;
+    
+    // Print histogram
+    println!("\nLatency Statistics:");
+    println!("Min: {:?}", min);
+    println!("Max: {:?}", max);
+    println!("Mean: {:?}", mean);
+    println!("Median: {:?}", median);
+    println!("p99: {:?}", p99);
+    
+    // Create a simple histogram with 10 buckets
+    let range = max.as_micros() - min.as_micros();
+    let bucket_size = range / 10;
+    
+    if bucket_size > 0 {
+        println!("\nHistogram (microseconds):");
+        
+        let mut buckets = vec![0; 10];
+        for latency in &latencies {
+            let bucket = ((latency.as_micros() - min.as_micros()) / bucket_size).min(9) as usize;
+            buckets[bucket] += 1;
+        }
+        
+        let max_count = *buckets.iter().max().unwrap_or(&1) as f64;
+        
+        for (i, count) in buckets.iter().enumerate() {
+            let start = min.as_micros() + (i as u128 * bucket_size);
+            let end = min.as_micros() + ((i + 1) as u128 * bucket_size);
+            let bar_length = ((*count as f64 / max_count) * 40.0) as usize;
+            let bar = "#".repeat(bar_length);
+            
+            println!("{:6}-{:6} µs [{:4}]: {}", start, end, count, bar);
+        }
+    }
+    
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -105,6 +194,9 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Server => run_server().await?,
         Commands::Client { ticket, message } => run_client(&ticket, &message).await?,
+        Commands::ClientBenchmark { ticket, count, size } => {
+            run_client_benchmark(&ticket, count, size).await?
+        }
     }
 
     Ok(())
