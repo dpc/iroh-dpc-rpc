@@ -1,0 +1,4 @@
+/target
+/target-nix
+/.direnv
+.aider*
