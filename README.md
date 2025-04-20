@@ -13,7 +13,13 @@ Support:
 
 * `bincode`-encoded messages
 * `bao-tree`-encoded messages (for incremental verification)
+
 Not exactly rocket science.
 
+TODO:
+
+* `cbor` encoding
+* configurable msg size limits
+* configurable concurrency limits
 
 See [Echo Example](./examples/echo.rs).
