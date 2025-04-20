@@ -259,8 +259,11 @@ pub enum RpcError {
 }
 pub type RpcResult<T> = Result<T, RpcError>;
 
+/// Extension trait adding rpc functionality to [`iroh::endpoint::Connection`]
 #[async_trait::async_trait]
 pub trait RpcExt {
+    /// Make an rpc with full control over sequence and types of messages being
+    /// sent
     async fn make_rpc_raw<F, FF, O>(
         &mut self,
         rpc_id: impl Into<RpcId> + Send,

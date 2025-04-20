@@ -20,7 +20,7 @@ pub const STD_BINCODE_CONFIG: config::Configuration<
     .with_big_endian()
     .with_variable_int_encoding();
 
-pub(crate) fn decode_whole<T>(bytes: &[u8]) -> Result<T, bincode::error::DecodeError>
+fn decode_whole<T>(bytes: &[u8]) -> Result<T, bincode::error::DecodeError>
 where
     T: bincode::Decode<()>,
 {
@@ -36,6 +36,7 @@ where
 }
 
 impl RpcWrite {
+    /// Write a bincode-encoded message
     pub async fn write_message_bincode<T: Encode>(&mut self, v: &T) -> RpcWriteResult<()> {
         let mut bytes = Vec::with_capacity(128);
 
@@ -61,7 +62,9 @@ impl RpcWrite {
         Ok(())
     }
 }
+
 impl RpcRead {
+    /// Read a bincode-encoded message
     pub async fn read_message_bincode<T: Decode<()>>(&mut self) -> RpcReadResult<T> {
         let bytes = self.read_message_raw().await?;
 
@@ -69,8 +72,12 @@ impl RpcRead {
     }
 }
 
+/// Extension trait adding bincode-encoded rpc functionality to
+/// [`iroh::endpoint::Connection`]
 #[async_trait::async_trait]
 pub trait RpcExtBincode: RpcExt {
+    /// Make a simple request-response rpc, where both messages are encoded
+    /// using `bincode`
     async fn make_request_response_bincode<Req, Resp>(
         &mut self,
         rpc_id: impl Into<RpcId> + Send,

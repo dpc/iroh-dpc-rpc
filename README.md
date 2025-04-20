@@ -1,4 +1,4 @@
-# Iroh Dpc Rpc
+# dpc's Iroh Rpc
 
 This is a simple RPC library for Iroh.
 
@@ -14,3 +14,6 @@ Support:
 * `bincode`-encoded messages
 * `bao-tree`-encoded messages (for incremental verification)
 Not exactly rocket science.
+
+
+See [Echo Example](./examples/echo.rs).
