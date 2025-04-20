@@ -1,10 +1,11 @@
+use bincode::{Decode, Encode};
 use iroh::Endpoint;
 use iroh::protocol::Router;
 use iroh_base::ticket::NodeTicket;
 use test_log::test;
-use bincode::{Decode, Encode};
 
-use crate::{DpcRpc, RpcExt, bincode::RpcExtBincode};
+use crate::bincode::RpcExtBincode;
+use crate::{DpcRpc, RpcExt};
 
 const TEST_RPC_ID: u16 = 1;
 const TEST_RPC_ALPN: &[u8] = b"bincode-test-rpc";
@@ -35,14 +36,14 @@ async fn test_bincode_rpc() {
         .handler(TEST_RPC_ID, |_, mut w, mut r| async move {
             // Read the request using bincode
             let req: TestRequest = r.read_message_bincode().await.unwrap();
-            
+
             // Create a response based on the request
             let resp = TestResponse {
                 id: req.id,
                 message: req.message,
                 data: req.data,
             };
-            
+
             // Send the response using bincode
             w.write_message_bincode(&resp).await.unwrap();
         })
@@ -72,7 +73,7 @@ async fn test_bincode_rpc() {
 
     for (i, size) in test_data_sizes.iter().enumerate() {
         let test_data = (0..*size).map(|i| (i % 256) as u8).collect::<Vec<u8>>();
-        
+
         // Create test request
         let request = TestRequest {
             id: i as u32,
@@ -85,15 +86,15 @@ async fn test_bincode_rpc() {
             .make_rpc_raw(TEST_RPC_ID, move |mut w, mut r| async move {
                 // Send request using bincode
                 w.write_message_bincode(&request).await?;
-                
+
                 // Read response using bincode
                 let response: TestResponse = r.read_message_bincode().await?;
-                
+
                 // Verify response matches request
                 assert_eq!(response.id, request.id);
                 assert_eq!(response.message, request.message);
                 assert_eq!(response.data, request.data);
-                
+
                 Ok(())
             })
             .await;
@@ -110,7 +111,7 @@ async fn test_bincode_rpc() {
     // Now test the high-level bincode API
     for (i, size) in test_data_sizes.iter().enumerate() {
         let test_data = (0..*size).map(|i| (i % 256) as u8).collect::<Vec<u8>>();
-        
+
         // Create test request
         let request = TestRequest {
             id: (i + 100) as u32, // Use different IDs to distinguish from previous tests
@@ -120,13 +121,13 @@ async fn test_bincode_rpc() {
 
         // Clone the request for comparison after the RPC call
         let request_clone = request.clone();
-        
+
         // Use the high-level bincode API
         let response: TestResponse = conn
             .make_request_response_bincode(TEST_RPC_ID, request)
             .await
             .unwrap();
-        
+
         // Verify response matches request
         assert_eq!(response.id, request_clone.id);
         assert_eq!(response.message, request_clone.message);
