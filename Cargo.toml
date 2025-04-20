@@ -2,11 +2,19 @@
 name = "iroh-dpc-rpc"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR APACHE-2.0 OR MPL-2.0"
+description = "dpc's Iroh rpc library"
+
+[features]
+default = ["bincode", "bao"]
+bincode = ["dep:bincode"]
+bao = ["dep:bao-tree"]
 
 [dependencies]
 anyhow = "1.0.98"
 async-trait = "0.1.88"
-bincode = { version = "2.0.0", features = ["derive"] }
+bao-tree = { version = "0.13", optional = true }
+bincode = { version = "2.0.0", features = ["derive"], optional = true }
 bon = "3.3.0"
 convi = { version = "0.1.1", features = ["min_target_pointer_width_32"] }
 derive_more = { version = "2.0.1", features = ["from"] }

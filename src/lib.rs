@@ -1,4 +1,7 @@
-mod util_bincode;
+#[cfg(feature = "bao")]
+pub mod bao;
+#[cfg(feature = "bincode")]
+pub mod bincode;
 mod util_error;
 
 use std::fmt;
@@ -6,7 +9,6 @@ use std::future::Future;
 use std::marker::Sync;
 use std::sync::Arc;
 
-use bincode::{Decode, Encode};
 use convi::CastInto as _;
 use derive_more::From;
 use fnv::FnvHashMap;
@@ -16,7 +18,6 @@ use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::protocol::ProtocolHandler;
 use snafu::{ResultExt as _, Snafu};
 use tracing::debug;
-use util_bincode::{STD_BINCODE_CONFIG, decode_whole};
 use util_error::BoxedError;
 
 const LOG_TARGET: &str = "iroh-dpc-rpc";
@@ -25,8 +26,8 @@ const LIMIT: u32 = 1_000_000;
 #[derive(Debug, Snafu)]
 pub enum RpcReadError {
     Read { source: BoxedError },
-    MsgTooLong { len: u32, limit: u32 },
-    Decoding { source: bincode::error::DecodeError },
+    ReadLen { len: u32, limit: u32 },
+    Decoding { source: BoxedError },
 }
 
 pub type RpcReadResult<T> = Result<T, RpcReadError>;
@@ -47,7 +48,7 @@ impl RpcRead {
         let len = u32::from_be_bytes(len_bytes);
 
         if LIMIT < len {
-            return MsgTooLongSnafu { len, limit: LIMIT }.fail();
+            return ReadLenSnafu { len, limit: LIMIT }.fail();
         }
 
         let len = len.cast_into();
@@ -61,12 +62,6 @@ impl RpcRead {
             .context(ReadSnafu)?;
 
         Ok(resp_bytes)
-    }
-
-    pub async fn read_message<T: Decode<()>>(&mut self) -> RpcReadResult<T> {
-        let bytes = self.read_message_raw().await?;
-
-        decode_whole::<T>(&bytes).context(DecodingSnafu)
     }
 
     async fn read_request_id(&mut self) -> RpcReadResult<RpcId> {
@@ -87,7 +82,8 @@ impl RpcRead {
 #[derive(Debug, Snafu)]
 pub enum RpcWriteError {
     Write { source: BoxedError },
-    Encoding { source: bincode::error::EncodeError },
+    WriteLen { len: u32, limit: u32 },
+    Encoding { source: BoxedError },
 }
 
 pub type RpcWriteResult<T> = Result<T, RpcWriteError>;
@@ -118,30 +114,6 @@ impl RpcWrite {
         self.send.write_all(msg).await.boxed().context(WriteSnafu)?;
         Ok(())
     }
-
-    pub async fn write_message<T: Encode>(&mut self, v: &T) -> RpcWriteResult<()> {
-        // No async writer support, sad
-        let mut bytes = Vec::with_capacity(128);
-
-        bincode::encode_into_std_write(v, &mut bytes, STD_BINCODE_CONFIG).context(EncodingSnafu)?;
-
-        self.send
-            .write_all(
-                &u32::try_from(bytes.len())
-                    .expect("Can't fail")
-                    .to_be_bytes(),
-            )
-            .await
-            .boxed()
-            .context(WriteSnafu)?;
-
-        self.send
-            .write_all(&bytes)
-            .await
-            .boxed()
-            .context(WriteSnafu)?;
-        Ok(())
-    }
 }
 
 /// Type erased handler fn
@@ -154,23 +126,6 @@ pub struct RpcId(u16);
 impl fmt::Display for RpcId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!("{}", self.0))
-    }
-}
-impl bincode::Encode for RpcId {
-    fn encode<E: bincode::enc::Encoder>(
-        &self,
-        encoder: &mut E,
-    ) -> core::result::Result<(), bincode::error::EncodeError> {
-        bincode::Encode::encode(&self.0.to_be_bytes(), encoder)?;
-        Ok(())
-    }
-}
-
-impl<C> bincode::Decode<C> for RpcId {
-    fn decode<D: bincode::de::Decoder>(
-        decoder: &mut D,
-    ) -> core::result::Result<Self, bincode::error::DecodeError> {
-        Ok(Self(u16::from_be_bytes(bincode::Decode::decode(decoder)?)))
     }
 }
 
@@ -315,23 +270,6 @@ pub trait RpcExt {
         F: Send + Sync + 'static,
         F: FnOnce(RpcWrite, RpcRead) -> FF + 'static,
         FF: Future<Output = RpcResult<O>> + Send + 'static;
-
-    async fn make_request_response<Req, Resp>(
-        &mut self,
-        rpc_id: impl Into<RpcId> + Send,
-        req: Req,
-    ) -> RpcResult<Resp>
-    where
-        Req: Encode + Send + Sync + 'static,
-        Resp: Decode<()> + Send,
-    {
-        self.make_rpc_raw(rpc_id, |mut w, mut r| async move {
-            w.write_message(&req).await?;
-            let resp = r.read_message().await?;
-            Ok(resp)
-        })
-        .await
-    }
 }
 
 #[async_trait::async_trait]
@@ -354,5 +292,6 @@ impl RpcExt for Connection {
         (handler)(send, recv).await
     }
 }
+
 #[cfg(test)]
 mod tests;
