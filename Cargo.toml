@@ -20,8 +20,8 @@ convi = { version = "0.1.1", features = ["min_target_pointer_width_32"] }
 derive_more = { version = "2.0.1", features = ["from"] }
 fnv = "1.0.7"
 futures-lite = "2.6.0"
-iroh = { version = "0.34.0", default-features = false }
-iroh-base = { version = "0.34.0", default-features = false, features = [
+iroh = { version = "0.35.0", default-features = false }
+iroh-base = { version = "0.35.0", default-features = false, features = [
   "ticket",
 ] }
 iroh-io = "0.6.0"
