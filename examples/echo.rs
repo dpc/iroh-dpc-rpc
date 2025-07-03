@@ -2,11 +2,13 @@ use std::time::{Duration, Instant};
 
 use bincode::{Decode, Encode};
 use clap::{Parser, Subcommand};
-use iroh::Endpoint;
 use iroh::protocol::Router;
+use iroh::{Endpoint, Watcher as _};
 use iroh_base::ticket::NodeTicket;
 use iroh_dpc_rpc::DpcRpc;
 use iroh_dpc_rpc::bincode::RpcExtBincode as _;
+use iroh_dpc_rpc::error::Whatever;
+use snafu::ResultExt as _;
 use tracing::info;
 
 const ECHO_RPC_ID: u16 = 1;
@@ -59,7 +61,7 @@ struct EchoResponse {
     message: String,
 }
 
-async fn run_server() -> anyhow::Result<()> {
+async fn run_server() -> Result<(), Whatever> {
     // Create the RPC service
     let rpc = DpcRpc::builder(())
         .handler(ECHO_RPC_ID, |_, mut w, mut r| async move {
@@ -75,32 +77,49 @@ async fn run_server() -> anyhow::Result<()> {
         })
         .build();
 
-    let endpoint = Endpoint::builder().bind().await?;
+    let endpoint = Endpoint::builder()
+        .bind()
+        .await
+        .whatever_context("Failed to bind endpoint")?;
 
-    let mut node_addr = endpoint.node_addr().await?;
+    let mut node_addr = endpoint
+        .node_addr()
+        .initialized()
+        .await
+        .whatever_context("Failed to get own node address")?;
     node_addr.direct_addresses = Default::default();
     let ticket = NodeTicket::new(node_addr);
 
-    let router = Router::builder(endpoint)
-        .accept(ECHO_RPC_ALPN, rpc)
-        .spawn()
-        .await?;
+    let router = Router::builder(endpoint).accept(ECHO_RPC_ALPN, rpc).spawn();
 
     println!("Server is running. Share this ticket with clients:");
     println!("{}", ticket);
     // wait until the user wants to
-    tokio::signal::ctrl_c().await?;
-    router.shutdown().await?;
+    tokio::signal::ctrl_c()
+        .await
+        .whatever_context("Failed to register signal handler")?;
+    router
+        .shutdown()
+        .await
+        .whatever_context("Failed to issue a shutdown")?;
 
     Ok(())
 }
 
-async fn run_client(ticket_str: &str, message: &str) -> anyhow::Result<()> {
-    let ticket: NodeTicket = ticket_str.parse()?;
+async fn run_client(ticket_str: &str, message: &str) -> Result<(), Whatever> {
+    let ticket: NodeTicket = ticket_str
+        .parse()
+        .whatever_context("Failed to parse the ticket")?;
 
-    let endpoint = Endpoint::builder().bind().await?;
+    let endpoint = Endpoint::builder()
+        .bind()
+        .await
+        .whatever_context("Failed to bind endpoint")?;
 
-    let mut conn = endpoint.connect(ticket, ECHO_RPC_ALPN).await?;
+    let mut conn = endpoint
+        .connect(ticket, ECHO_RPC_ALPN)
+        .await
+        .whatever_context("Failed to connect")?;
 
     let request = EchoRequest {
         message: message.to_string(),
@@ -109,7 +128,8 @@ async fn run_client(ticket_str: &str, message: &str) -> anyhow::Result<()> {
     println!("Sending message: {}", message);
     let response: EchoResponse = conn
         .make_request_response_bincode(ECHO_RPC_ID, request)
-        .await?;
+        .await
+        .whatever_context("Request failed")?;
 
     println!("Received echo response: {}", response.message);
 
@@ -121,8 +141,10 @@ async fn run_client_benchmark(
     count: usize,
     size: usize,
     tasks: usize,
-) -> anyhow::Result<()> {
-    let ticket: NodeTicket = ticket_str.parse()?;
+) -> Result<(), Whatever> {
+    let ticket: NodeTicket = ticket_str
+        .parse()
+        .whatever_context("Failed to parse the ticket")?;
 
     // Generate a message of the specified size
     let message = "A".repeat(size);
@@ -163,8 +185,14 @@ async fn run_client_benchmark(
         // Spawn a task
         let handle = tokio::spawn(async move {
             let mut task_latencies = Vec::with_capacity(task_requests);
-            let endpoint = Endpoint::builder().bind().await?;
-            let mut conn = endpoint.connect(ticket_clone, ECHO_RPC_ALPN).await?;
+            let endpoint = Endpoint::builder()
+                .bind()
+                .await
+                .whatever_context("Failed to bind endpoint")?;
+            let mut conn = endpoint
+                .connect(ticket_clone, ECHO_RPC_ALPN)
+                .await
+                .whatever_context("Failed to connect")?;
 
             for _ in 0..task_requests {
                 let request = EchoRequest {
@@ -174,7 +202,8 @@ async fn run_client_benchmark(
                 let start = Instant::now();
                 let _: EchoResponse = conn
                     .make_request_response_bincode(ECHO_RPC_ID, request)
-                    .await?;
+                    .await
+                    .whatever_context("Request failed")?;
                 let elapsed = start.elapsed();
 
                 task_latencies.push(elapsed);
@@ -190,7 +219,7 @@ async fn run_client_benchmark(
             let mut latencies = latencies_clone.lock().await;
             latencies.extend(task_latencies);
 
-            Ok::<_, anyhow::Error>(())
+            Ok(())
         });
 
         handles.push(handle);
@@ -198,7 +227,7 @@ async fn run_client_benchmark(
 
     // Wait for all tasks to complete
     for handle in handles {
-        handle.await??;
+        handle.await.whatever_context("Task failed")??;
     }
 
     // Get all latencies
@@ -256,7 +285,7 @@ async fn run_client_benchmark(
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Whatever> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();

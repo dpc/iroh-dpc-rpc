@@ -2,21 +2,23 @@
 pub mod bao;
 #[cfg(feature = "bincode")]
 pub mod bincode;
+pub mod error;
 mod util_error;
-
 use std::fmt;
 use std::future::Future;
 use std::marker::Sync;
+use std::result::Result;
 use std::sync::Arc;
 
 use convi::CastInto as _;
 use derive_more::From;
+use error::Whatever;
 use fnv::FnvHashMap;
 use futures_lite::FutureExt;
 use iroh::PublicKey;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
-use iroh::protocol::ProtocolHandler;
-use snafu::{ResultExt as _, Snafu};
+use iroh::protocol::{AcceptError, ProtocolHandler};
+use snafu::{ResultExt as _, Snafu, whatever};
 use tracing::debug;
 use util_error::BoxedError;
 
@@ -157,8 +159,11 @@ where
         send: RpcWrite,
         mut recv: RpcRead,
         remote_node_id: PublicKey,
-    ) -> anyhow::Result<()> {
-        let rpc_id = recv.read_request_id().await?;
+    ) -> Result<(), Whatever> {
+        let rpc_id = recv
+            .read_request_id()
+            .await
+            .whatever_context("Failed to read request id")?;
 
         debug!(
             target: LOG_TARGET,
@@ -170,7 +175,7 @@ where
         if let Some(handler) = self.inner.handlers.get(&rpc_id) {
             (handler)(self.inner.state.clone(), send, recv).await
         } else {
-            anyhow::bail!("Request RpcId {rpc_id} not found")
+            whatever!("Request RpcId {rpc_id} not found");
         }
         Ok(())
     }
@@ -221,17 +226,17 @@ impl<S> ProtocolHandler for DpcRpc<S>
 where
     S: Send + Sync + 'static + Clone,
 {
-    fn accept(&self, conn: Connection) -> futures_lite::future::Boxed<anyhow::Result<()>> {
+    fn accept(
+        &self,
+        conn: Connection,
+    ) -> impl futures_lite::Future<Output = Result<(), AcceptError>> + std::marker::Send {
         let s = self.clone();
         Box::pin(async move {
-            let remote_node_id = anyhow::Context::context(
-                conn.remote_node_id(),
-                "Getting remote node
-            id",
-            )?;
+            let remote_node_id = conn.remote_node_id().map_err(|source| AcceptError::User {
+                source: source.into(),
+            })?;
             loop {
-                let (send, recv) =
-                    anyhow::Context::context(conn.accept_bi().await, "Accepting connection")?;
+                let (send, recv) = conn.accept_bi().await?;
                 let (send, recv) = (RpcWrite { send }, RpcRead { recv });
 
                 tokio::spawn(s.clone().handle_request(send, recv, remote_node_id));

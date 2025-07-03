@@ -11,7 +11,6 @@ bincode = ["dep:bincode"]
 bao = ["dep:bao-tree"]
 
 [dependencies]
-anyhow = "1.0.98"
 async-trait = "0.1.88"
 bao-tree = { version = "0.13", optional = true }
 bincode = { version = "2.0.0", features = ["derive"], optional = true }
@@ -20,11 +19,11 @@ convi = { version = "0.1.1", features = ["min_target_pointer_width_32"] }
 derive_more = { version = "2.0.1", features = ["from"] }
 fnv = "1.0.7"
 futures-lite = "2.6.0"
-iroh = { version = "0.35.0", default-features = false }
-iroh-base = { version = "0.35.0", default-features = false, features = [
+iroh = { version = "0.90.0", default-features = false }
+iroh-base = { version = "0.90.0", default-features = false, features = [
   "ticket",
 ] }
-iroh-io = "0.6.0"
+iroh-io = "0.6.2"
 rand = "0.8.0"
 redb = "2.3.0"
 snafu = { version = "0.8.5", features = ["rust_1_81"] }

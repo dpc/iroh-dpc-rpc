@@ -1,6 +1,6 @@
 use bincode::{Decode, Encode};
-use iroh::Endpoint;
 use iroh::protocol::Router;
+use iroh::{Endpoint, Watcher as _};
 use iroh_base::ticket::NodeTicket;
 use test_log::test;
 
@@ -50,14 +50,12 @@ async fn test_bincode_rpc() {
         .build();
 
     // Create server router
-    let server_addr = server_endpoint.node_addr().await.unwrap();
+    let server_addr = server_endpoint.node_addr().initialized().await.unwrap();
     let ticket = NodeTicket::new(server_addr);
 
     let router = Router::builder(server_endpoint)
         .accept(TEST_RPC_ALPN, rpc)
-        .spawn()
-        .await
-        .unwrap();
+        .spawn();
 
     // Create client endpoint
     let client_endpoint = Endpoint::builder().bind().await.unwrap();
