@@ -26,7 +26,8 @@ async fn test_bao_rpc() {
                 .await
                 .unwrap();
 
-            assert_eq!(data_raw, data_bao)
+            assert_eq!(data_raw, data_bao);
+            Ok(())
         })
         .build();
 

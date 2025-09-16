@@ -66,14 +66,16 @@ async fn run_server() -> Result<(), Whatever> {
     let rpc = DpcRpc::builder(())
         .handler(ECHO_RPC_ID, |_, mut w, mut r| async move {
             // Read the request
-            let req: EchoRequest = r.read_message_bincode().await.unwrap();
+            let req: EchoRequest = r.read_message_bincode().await?;
             info!("Received echo request: {}", req.message);
 
             // Send the response
             let resp = EchoResponse {
                 message: req.message,
             };
-            w.write_message_bincode(&resp).await.unwrap();
+            w.write_message_bincode(&resp).await?;
+
+            Ok(())
         })
         .build();
 

@@ -46,6 +46,8 @@ async fn test_bincode_rpc() {
 
             // Send the response using bincode
             w.write_message_bincode(&resp).await.unwrap();
+
+            Ok(())
         })
         .build();
 

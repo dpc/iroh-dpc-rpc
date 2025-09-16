@@ -25,6 +25,12 @@ use util_error::BoxedError;
 const LOG_TARGET: &str = "iroh-dpc-rpc";
 const LIMIT: u32 = 1_000_000;
 
+pub enum HelloOutcome {
+    Continue,
+    Promote,
+    Disconnect,
+}
+
 #[derive(Debug, Snafu)]
 pub enum RpcReadError {
     Read { source: BoxedError },
@@ -119,8 +125,18 @@ impl RpcWrite {
 }
 
 /// Type erased handler fn
-type HandlerFn<S> =
-    Box<dyn Fn(S, RpcWrite, RpcRead) -> futures_lite::future::Boxed<()> + Send + Sync + 'static>;
+type HandlerFn<S> = Box<
+    dyn Fn(S, RpcWrite, RpcRead) -> futures_lite::future::Boxed<Result<(), RpcError>>
+        + Send
+        + Sync
+        + 'static,
+>;
+type HandlerHelloFn<S> = Box<
+    dyn Fn(S, RpcWrite, RpcRead) -> futures_lite::future::Boxed<Result<HelloOutcome, RpcError>>
+        + Send
+        + Sync
+        + 'static,
+>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, From)]
 pub struct RpcId(u16);
@@ -134,6 +150,7 @@ impl fmt::Display for RpcId {
 struct DpcRpcInner<S> {
     state: S,
     handlers: FnvHashMap<RpcId, HandlerFn<S>>,
+    handlers_hello: FnvHashMap<RpcId, HandlerHelloFn<S>>,
 }
 
 #[derive(Clone)]
@@ -144,6 +161,58 @@ impl<S> DpcRpc<S>
 where
     S: Send + Sync + 'static + Clone,
 {
+    async fn handle_request_hello(
+        self,
+        send: RpcWrite,
+        recv: RpcRead,
+        remote_node_id: PublicKey,
+    ) -> HelloOutcome {
+        match self
+            .handle_request_hello_try(send, recv, remote_node_id)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                debug!(
+                    target: LOG_TARGET,
+                    from = %remote_node_id,
+                    err = %err,
+                    "Rpc request handler failed"
+                );
+                HelloOutcome::Disconnect
+            }
+        }
+    }
+
+    async fn handle_request_hello_try(
+        &self,
+        send: RpcWrite,
+        mut recv: RpcRead,
+        remote_node_id: PublicKey,
+    ) -> Result<HelloOutcome, Whatever> {
+        let rpc_id = recv
+            .read_request_id()
+            .await
+            .whatever_context("Failed to read request id")?;
+
+        debug!(
+            target: LOG_TARGET,
+            rpc_id = %rpc_id,
+            from = %remote_node_id,
+            "Rpc request"
+        );
+
+        if let Some(handler) = self.inner.handlers_hello.get(&rpc_id) {
+            Ok((handler)(self.inner.state.clone(), send, recv)
+                .await
+                .with_whatever_context(|_err| {
+                    format!("Rpc handler for Hello RpcId {rpc_id} failed")
+                })?)
+        } else {
+            whatever!("Request RpcId {rpc_id} not found");
+        }
+    }
+
     async fn handle_request(self, send: RpcWrite, recv: RpcRead, remote_node_id: PublicKey) {
         if let Err(err) = self.handle_request_try(send, recv, remote_node_id).await {
             debug!(
@@ -154,6 +223,7 @@ where
             );
         }
     }
+
     async fn handle_request_try(
         &self,
         send: RpcWrite,
@@ -173,7 +243,9 @@ where
         );
 
         if let Some(handler) = self.inner.handlers.get(&rpc_id) {
-            (handler)(self.inner.state.clone(), send, recv).await
+            (handler)(self.inner.state.clone(), send, recv)
+                .await
+                .with_whatever_context(|_err| format!("Rpc handler for RpcId {rpc_id} failed"))?;
         } else {
             whatever!("Request RpcId {rpc_id} not found");
         }
@@ -193,9 +265,14 @@ impl<S> DpcRpc<S> {
     pub fn new(
         #[builder(start_fn)] state: S,
         #[builder(field)] handlers: FnvHashMap<RpcId, HandlerFn<S>>,
+        #[builder(field)] handlers_hello: FnvHashMap<RpcId, HandlerHelloFn<S>>,
     ) -> Self {
         Self {
-            inner: Arc::new(DpcRpcInner { state, handlers }),
+            inner: Arc::new(DpcRpcInner {
+                state,
+                handlers,
+                handlers_hello,
+            }),
         }
     }
 }
@@ -208,11 +285,33 @@ where
     where
         F: Send + Sync + 'static,
         F: Fn(S, RpcWrite, RpcRead) -> FF,
-        FF: Future<Output = ()> + Send + 'static,
+        FF: Future<Output = Result<(), RpcError>> + Send + 'static,
     {
         let rpc_id = rpc_id.into();
         if self
             .handlers
+            .insert(rpc_id, Box::new(move |s, w, r| handler(s, w, r).boxed()))
+            .is_some()
+        {
+            panic!("Multiple handler registered for rpc_id: {rpc_id:?}")
+        }
+        self
+    }
+}
+
+impl<BS: dpc_rpc_builder::State, S> DpcRpcBuilder<S, BS>
+where
+    S: Send + Clone,
+{
+    pub fn handler_hello<F, FF>(mut self, rpc_id: impl Into<RpcId>, handler: F) -> Self
+    where
+        F: Send + Sync + 'static,
+        F: Fn(S, RpcWrite, RpcRead) -> FF,
+        FF: Future<Output = Result<HelloOutcome, RpcError>> + Send + 'static,
+    {
+        let rpc_id = rpc_id.into();
+        if self
+            .handlers_hello
             .insert(rpc_id, Box::new(move |s, w, r| handler(s, w, r).boxed()))
             .is_some()
         {
@@ -235,6 +334,23 @@ where
             let remote_node_id = conn.remote_node_id().map_err(|source| AcceptError::User {
                 source: source.into(),
             })?;
+
+            if !s.inner.handlers_hello.is_empty() {
+                loop {
+                    let (send, recv) = conn.accept_bi().await?;
+                    let (send, recv) = (RpcWrite { send }, RpcRead { recv });
+
+                    match s
+                        .clone()
+                        .handle_request_hello(send, recv, remote_node_id)
+                        .await
+                    {
+                        HelloOutcome::Continue => continue,
+                        HelloOutcome::Promote => break,
+                        HelloOutcome::Disconnect => return Ok(()),
+                    };
+                }
+            }
             loop {
                 let (send, recv) = conn.accept_bi().await?;
                 let (send, recv) = (RpcWrite { send }, RpcRead { recv });
@@ -248,19 +364,14 @@ where
 #[derive(Debug, Snafu)]
 pub enum RpcError {
     #[snafu(transparent)]
-    Read {
-        source: RpcReadError,
-    },
+    Read { source: RpcReadError },
     #[snafu(transparent)]
-    Write {
-        source: RpcWriteError,
-    },
+    Write { source: RpcWriteError },
     StreamConnection {
         source: iroh::endpoint::ConnectionError,
     },
-    Other {
-        source: BoxedError,
-    },
+    #[snafu(transparent)]
+    Other { source: BoxedError },
 }
 pub type RpcResult<T> = Result<T, RpcError>;
 
