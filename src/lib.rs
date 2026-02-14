@@ -165,17 +165,14 @@ where
         self,
         send: RpcWrite,
         recv: RpcRead,
-        remote_node_id: PublicKey,
+        remote_id: PublicKey,
     ) -> HelloOutcome {
-        match self
-            .handle_request_hello_try(send, recv, remote_node_id)
-            .await
-        {
+        match self.handle_request_hello_try(send, recv, remote_id).await {
             Ok(outcome) => outcome,
             Err(err) => {
                 debug!(
                     target: LOG_TARGET,
-                    from = %remote_node_id,
+                    from = %remote_id,
                     err = %err,
                     "Rpc request handler failed"
                 );
@@ -188,7 +185,7 @@ where
         &self,
         send: RpcWrite,
         mut recv: RpcRead,
-        remote_node_id: PublicKey,
+        remote_id: PublicKey,
     ) -> Result<HelloOutcome, Whatever> {
         let rpc_id = recv
             .read_request_id()
@@ -198,7 +195,7 @@ where
         debug!(
             target: LOG_TARGET,
             rpc_id = %rpc_id,
-            from = %remote_node_id,
+            from = %remote_id,
             "Rpc request"
         );
 
@@ -213,11 +210,11 @@ where
         }
     }
 
-    async fn handle_request(self, send: RpcWrite, recv: RpcRead, remote_node_id: PublicKey) {
-        if let Err(err) = self.handle_request_try(send, recv, remote_node_id).await {
+    async fn handle_request(self, send: RpcWrite, recv: RpcRead, remote_id: PublicKey) {
+        if let Err(err) = self.handle_request_try(send, recv, remote_id).await {
             debug!(
                 target: LOG_TARGET,
-                from = %remote_node_id,
+                from = %remote_id,
                 err = %err,
                 "Rpc request handler failed"
             );
@@ -228,7 +225,7 @@ where
         &self,
         send: RpcWrite,
         mut recv: RpcRead,
-        remote_node_id: PublicKey,
+        remote_id: PublicKey,
     ) -> Result<(), Whatever> {
         let rpc_id = recv
             .read_request_id()
@@ -238,7 +235,7 @@ where
         debug!(
             target: LOG_TARGET,
             rpc_id = %rpc_id,
-            from = %remote_node_id,
+            from = %remote_id,
             "Rpc request"
         );
 
@@ -331,20 +328,14 @@ where
     ) -> impl futures_lite::Future<Output = Result<(), AcceptError>> + std::marker::Send {
         let s = self.clone();
         Box::pin(async move {
-            let remote_node_id = conn.remote_node_id().map_err(|source| AcceptError::User {
-                source: source.into(),
-            })?;
+            let remote_id = conn.remote_id();
 
             if !s.inner.handlers_hello.is_empty() {
                 loop {
                     let (send, recv) = conn.accept_bi().await?;
                     let (send, recv) = (RpcWrite { send }, RpcRead { recv });
 
-                    match s
-                        .clone()
-                        .handle_request_hello(send, recv, remote_node_id)
-                        .await
-                    {
+                    match s.clone().handle_request_hello(send, recv, remote_id).await {
                         HelloOutcome::Continue => continue,
                         HelloOutcome::Promote => break,
                         HelloOutcome::Disconnect => return Ok(()),
@@ -355,7 +346,7 @@ where
                 let (send, recv) = conn.accept_bi().await?;
                 let (send, recv) = (RpcWrite { send }, RpcRead { recv });
 
-                tokio::spawn(s.clone().handle_request(send, recv, remote_node_id));
+                tokio::spawn(s.clone().handle_request(send, recv, remote_id));
             }
         })
     }

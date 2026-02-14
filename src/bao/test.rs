@@ -1,6 +1,5 @@
+use iroh::Endpoint;
 use iroh::protocol::Router;
-use iroh::{Endpoint, Watcher as _};
-use iroh_base::ticket::NodeTicket;
 use test_log::test;
 
 use crate::{DpcRpc, RpcExt};
@@ -32,8 +31,7 @@ async fn test_bao_rpc() {
         .build();
 
     // Create server router
-    let server_addr = server_endpoint.node_addr().initialized().await.unwrap();
-    let ticket = NodeTicket::new(server_addr);
+    let server_addr = server_endpoint.addr();
 
     let router = Router::builder(server_endpoint)
         .accept(TEST_RPC_ALPN, rpc)
@@ -44,7 +42,7 @@ async fn test_bao_rpc() {
 
     // Connect to server
     let mut conn = client_endpoint
-        .connect(ticket, TEST_RPC_ALPN)
+        .connect(server_addr, TEST_RPC_ALPN)
         .await
         .unwrap();
 

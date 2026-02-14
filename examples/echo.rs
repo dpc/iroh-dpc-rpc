@@ -2,14 +2,27 @@ use std::time::{Duration, Instant};
 
 use bincode::{Decode, Encode};
 use clap::{Parser, Subcommand};
+use iroh::Endpoint;
 use iroh::protocol::Router;
-use iroh::{Endpoint, Watcher as _};
-use iroh_base::ticket::NodeTicket;
+use iroh_base::EndpointAddr;
 use iroh_dpc_rpc::DpcRpc;
 use iroh_dpc_rpc::bincode::RpcExtBincode as _;
 use iroh_dpc_rpc::error::Whatever;
 use snafu::ResultExt as _;
 use tracing::info;
+
+fn endpoint_addr_to_string(addr: &EndpointAddr) -> String {
+    data_encoding::BASE64URL_NOPAD.encode(addr.id.as_bytes())
+}
+
+fn endpoint_addr_from_string(s: &str) -> Result<EndpointAddr, Whatever> {
+    let bytes = data_encoding::BASE64URL_NOPAD
+        .decode(s.as_bytes())
+        .whatever_context("Failed to decode base64")?;
+    let id = iroh_base::EndpointId::try_from(&bytes[..])
+        .whatever_context("Failed to parse endpoint id")?;
+    Ok(EndpointAddr::new(id))
+}
 
 const ECHO_RPC_ID: u16 = 1;
 pub const ECHO_RPC_ALPN: &[u8] = b"echo-rpc";
@@ -84,18 +97,13 @@ async fn run_server() -> Result<(), Whatever> {
         .await
         .whatever_context("Failed to bind endpoint")?;
 
-    let mut node_addr = endpoint
-        .node_addr()
-        .initialized()
-        .await
-        .whatever_context("Failed to get own node address")?;
-    node_addr.direct_addresses = Default::default();
-    let ticket = NodeTicket::new(node_addr);
+    let mut endpoint_addr = endpoint.addr();
+    endpoint_addr.addrs = Default::default();
 
     let router = Router::builder(endpoint).accept(ECHO_RPC_ALPN, rpc).spawn();
 
     println!("Server is running. Share this ticket with clients:");
-    println!("{}", ticket);
+    println!("{}", endpoint_addr_to_string(&endpoint_addr));
     // wait until the user wants to
     tokio::signal::ctrl_c()
         .await
@@ -109,9 +117,7 @@ async fn run_server() -> Result<(), Whatever> {
 }
 
 async fn run_client(ticket_str: &str, message: &str) -> Result<(), Whatever> {
-    let ticket: NodeTicket = ticket_str
-        .parse()
-        .whatever_context("Failed to parse the ticket")?;
+    let endpoint_addr = endpoint_addr_from_string(ticket_str)?;
 
     let endpoint = Endpoint::builder()
         .bind()
@@ -119,7 +125,7 @@ async fn run_client(ticket_str: &str, message: &str) -> Result<(), Whatever> {
         .whatever_context("Failed to bind endpoint")?;
 
     let mut conn = endpoint
-        .connect(ticket, ECHO_RPC_ALPN)
+        .connect(endpoint_addr, ECHO_RPC_ALPN)
         .await
         .whatever_context("Failed to connect")?;
 
@@ -144,9 +150,7 @@ async fn run_client_benchmark(
     size: usize,
     tasks: usize,
 ) -> Result<(), Whatever> {
-    let ticket: NodeTicket = ticket_str
-        .parse()
-        .whatever_context("Failed to parse the ticket")?;
+    let endpoint_addr = endpoint_addr_from_string(ticket_str)?;
 
     // Generate a message of the specified size
     let message = "A".repeat(size);
@@ -179,7 +183,7 @@ async fn run_client_benchmark(
         }
 
         // Clone shared resources for this task
-        let ticket_clone = ticket.clone();
+        let ticket_clone = endpoint_addr.clone();
         let message_clone = message.clone();
         let latencies_clone = latencies_mutex.clone();
         let progress_clone = progress.clone();

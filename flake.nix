@@ -1,10 +1,10 @@
 {
-  description = "Flakebox Project template";
+  description = "Iroh rpc library (by dpc)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
-    flakebox.url = "github:rustshop/flakebox?rev=0279d0e216b5ab0e5a3c8de5e489ac98edf318f8";
+    flakebox.url = "github:rustshop/flakebox";
   };
 
   outputs =
@@ -19,7 +19,9 @@
       let
         projectName = "flakebox-project";
 
-        flakeboxLib = flakebox.lib.${system} {
+        pkgs = nixpkgs.legacyPackages.${system};
+
+        flakeboxLib = flakebox.lib.mkLib pkgs {
           config = {
             github.ci.buildOutputs = [ ".#ci.${projectName}" ];
           };
